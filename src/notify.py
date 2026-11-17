@@ -15,8 +15,8 @@ def notify(cfg: dict, title: str, content: str) -> bool:
             return _bark(n.get("bark_url", ""), title, content)
         if ntype == "wecom":
             return _wecom(n.get("wecom_webhook", ""), title, content)
-    except Exception as e:  # 推送失败不影响签到主流程
-        print(f"[notify] 推送异常：{e}")
+    except Exception as e:  # 请求异常可能含带 SendKey 的 URL，不输出异常正文
+        print(f"[notify] 推送异常：{type(e).__name__}")
     return False
 
 
@@ -65,3 +65,4 @@ def _wecom(webhook: str, title: str, content: str) -> bool:
     ok = r.status_code == 200 and r.json().get("errcode") == 0
     print(f"[notify] wecom -> {ok}")
     return ok
+

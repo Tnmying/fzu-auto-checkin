@@ -10,6 +10,7 @@ v1.0 主路径：直接使用 App 免登 token（获取方式见 docs/protocol.m
 from src.config import load_config
 from src.checkin import AttnClient, query_today_task, do_checkin
 from src.notify import notify
+from src.alerts import report_failure
 from src.vacation import matched_range, today_cn
 from src.schedule import (
     Decision,
@@ -26,9 +27,6 @@ import os
 import re
 import sys
 import time
-
-import requests
-
 
 def _safe_stdout():
     """让 Windows 的 GBK 控制台不会因为 ✅ / ⚠ 之类的字符直接崩掉。
@@ -236,34 +234,30 @@ def main():
         return
 
     token = (cfg.get("user") or {}).get("token", "")
-    if not token:
-        username = (cfg.get("user") or {}).get("username", "")
-        password = (cfg.get("user") or {}).get("password", "")
-        if not (username and password):
-            raise SystemExit(
-                "config.yaml 未配置 token，且学号/密码不全（学号密码=智汇福大 App 登录账号）"
-            )
-        from src.login import login as sso_login
-
-        token = sso_login(username, password)
-        print("SSO 登录成功，已获取新 token")
-        _save_token(cfg, token)
-
-    client = AttnClient(token)
     try:
+        if not token:
+            username = (cfg.get("user") or {}).get("username", "")
+            password = (cfg.get("user") or {}).get("password", "")
+            if not (username and password):
+                raise ValueError("缺少登录凭据")
+            from src.login import login as sso_login
+
+            token = sso_login(username, password)
+            if not token:
+                raise ValueError("登录未返回 token")
+            print("SSO 登录成功，已获取新 token")
+            _save_token(cfg, token)
+    except Exception as e:
+        report_failure(cfg, "login", e, started, force=force)
+        raise SystemExit(1) from None
+
+    try:
+        client = AttnClient(token)
         status = query_today_task(client, cfg)
-    except requests.HTTPError as e:
-        # 跨午夜时段（约 0:00-1:00）服务器尚未发布当日计划时会返回 500，属正常现象。
-        title = "智汇福大晚点名：服务器暂未返回今日计划"
-        print(title, e)
-        # 21:45 前的首跑推送提醒一次；之后的兜底跑静默，避免一晚连推多条。
-        # 这个阈值只用于"推送去重"，与签到窗口/自定义 times 无关，故不接调度器。
-        if now_cn().time() < datetime.time(21, 45):
-            notify(cfg, title, "服务器暂时无今日计划数据（跨天时段/服务波动），本次跳过。稍后自动重试无需操作。")
-        else:
-            print("（兜底跑：仍无计划数据，静默跳过，不再重复推送）")
-        return
-    init_data = status["init"]
+        init_data = status["init"]
+    except Exception as e:
+        report_failure(cfg, "query", e, started, force=force)
+        raise SystemExit(1) from None
 
     if not status["need_checkin"]:
         # 静默：首跑成功时已推送过，后续兜底跑只需记日志，不再打扰
@@ -283,20 +277,18 @@ def main():
     try:
         ok = do_checkin(client, cfg, init_data)
     except Exception as e:  # 接口报错（如不在时段/范围）要带原因推送
-        title = "智汇福大晚点名：签到失败 ❌"
-        print(title, e)
-        notify(cfg, title, f"自动签到失败：{e}\n执行时刻 {exec_text}，请手动打开 App 签到。")
-        return
+        report_failure(cfg, "checkin", e, started, force=force)
+        raise SystemExit(1) from None
 
     if ok:
         title = "智汇福大晚点名：签到成功 ✅"
         print(title)
         notify(cfg, title, f"今日晚点名已自动签到成功（执行时刻 {exec_text}）。")
     else:
-        title = "智汇福大晚点名：不在签到范围 ❌"
-        print(title)
-        notify(cfg, title, f"定位校验未命中任何校区，请确认配置的经纬度。（执行时刻 {exec_text}）")
+        report_failure(cfg, "location", ValueError("定位越界"), started, force=force)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
     main()
+

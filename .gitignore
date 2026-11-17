@@ -42,3 +42,6 @@ docs/**/cookie*.txt
 # （fork、GitHub 的 SHA 缓存窗口）。截图只作为本地验收物，需要时就地生成、就地查看。
 # scripts/ui-verify.ps1 的输出目录就是这里，所以忽略整个目录最省事。
 docs/verify-shots/
+
+# Failure alert delivery receipt (contains only a date).
+.checkin-alert/

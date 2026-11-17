@@ -64,6 +64,19 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
+      # 只缓存已送达异常提醒的北京时间日期，不缓存任何凭据。
+      - name: Set alert date
+        id: alert-date
+        run: echo "day=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore failure alert receipt
+        id: alert-receipt
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .checkin-alert/sent
+          key: checkin-failure-alert-v1-${{ steps.alert-date.outputs.day }}
+
       # 认证配置两种来源，优先级：CONFIG_YAML secret > 仓库内已提交的 config.yaml（私密库场景）
       # secret 内容 = 完整的 config.yaml，两种认证方式任选：
       #   1) user.token: "<免登token>"           （token 方式）
@@ -87,4 +100,15 @@ jobs:
       - name: Run checkin
         env:
           CHECKIN_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force == true && 1 || 0 }}
+          CHECKIN_ALERT_STATE_PATH: .checkin-alert/sent
         run: python main.py
+
+      # 主步骤失败也保存送达回执；推送失败不会写回执，后续任务继续尝试提醒。
+      - name: Save failure alert receipt
+        if: ${{ always() && steps.alert-date.outputs.day != '' && steps.alert-receipt.outputs.cache-hit != 'true' && hashFiles('.checkin-alert/sent') != '' }}
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .checkin-alert/sent
+          key: checkin-failure-alert-v1-${{ steps.alert-date.outputs.day }}
+
